@@ -32,8 +32,8 @@ struct VertexOutput {
 fn vs_main(in: VertexInput, @builtin(instance_index) index: u32) -> VertexOutput {
 
     var out: VertexOutput;
-    let x: f32 = f32(index % 100) - 50;
-    let y: f32 = f32(index / 100) - 90;
+    let x: f32 = f32(index % 20) - 10;
+    let y: f32 = f32(index / 20) - 10;
     out.pos = r_locals.transform * (in.pos + vec4(3.0 * x, 0.0, - 3.0 * y, 1.0));
     out.color = vec4(in.texcoord, 1.0, 1.0);
     return out;
@@ -105,6 +105,7 @@ device = adapter.request_device_sync()
 # setting up a canvas, so we can see what we draw
 window_size = (640, 480)
 canvas = RenderCanvas(size=window_size, title="wgpu triangle example", update_mode='continuous')
+canvas_size = canvas.get_physical_size()
 context = canvas.get_wgpu_context()
 render_texture_format = context.get_preferred_format(device.adapter)
 context.configure(device=device, format=render_texture_format)
@@ -175,7 +176,11 @@ render_pipeline = device.create_render_pipeline(
             front_face="ccw",
             cull_mode="back",
         ),
-        depth_stencil=None,
+        depth_stencil=wgpu.DepthStencilState(
+            format=wgpu.TextureFormat.depth32float,
+            depth_write_enabled=True,
+            depth_compare="less"
+        ),
         multisample=None,
         fragment=wgpu.FragmentState(
             module=shader,
@@ -184,6 +189,11 @@ render_pipeline = device.create_render_pipeline(
     )
 )
 
+depth_texture = device.create_texture(
+    size=canvas_size, format=wgpu.TextureFormat.depth32float,
+    usage=wgpu.TextureUsage.RENDER_ATTACHMENT | wgpu.TextureUsage.TEXTURE_BINDING
+)
+depth_view = depth_texture.create_view()
 
 vertex_buffer = device.create_buffer_with_data(
     data=vertex_data,
@@ -191,12 +201,10 @@ vertex_buffer = device.create_buffer_with_data(
     label="Cube Example vertex buffer",
 )
 
-# Create index buffer, and upload data
 index_buffer = device.create_buffer_with_data(
     data=index_data, usage=wgpu.BufferUsage.INDEX, label="Cube Example index buffer"
 )
 
-# this function gets called for every frame. It ends with submitting a buffer of work onto the GPU queue.
 def drawing_function():
     command_encoder = device.create_command_encoder()
     current_texture_view = context.get_current_texture().create_view()
@@ -204,7 +212,7 @@ def drawing_function():
     t = time.time()
 
     model = glm.mat4(1.0)
-    model = glm.rotate(model, glm.radians(t % 360) * 20.0, glm.vec3(1.0, 0.3, 0.5))
+    model = glm.rotate(model, glm.radians(t % 360) * 20.0, glm.vec3(0.0, 1.0, 0.0))
 
     uniform_data = glm.perspectiveFovRH_ZO(glm.radians(60), window_size[0], window_size[1], 0.1, 100.0) * glm.lookAt(
             glm.vec3(3.0, 3.0, -6.0),
@@ -223,12 +231,18 @@ def drawing_function():
                 store_op=wgpu.StoreOp.store,
             )
         ],
+        depth_stencil_attachment=wgpu.RenderPassDepthStencilAttachment(
+            view=depth_view,
+            depth_load_op="clear",
+            depth_store_op="store",
+            depth_clear_value=1.0
+        )
     )
     render_pass.set_pipeline(render_pipeline)
     render_pass.set_index_buffer(index_buffer, "uint32")
     render_pass.set_vertex_buffer(0, vertex_buffer)
     render_pass.set_bind_group(0, bind_group)
-    render_pass.draw_indexed(index_data.size, 10000)
+    render_pass.draw_indexed(index_data.size, 400)
     render_pass.end()
     device.queue.submit([command_encoder.finish()])
 
