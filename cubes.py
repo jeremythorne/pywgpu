@@ -24,7 +24,7 @@ struct Locals {
 var<uniform> r_locals: Locals;
 
 struct VertexOutput {
-    @location(0) color : vec4f,
+    @location(0) uv : vec2f,
     @builtin(position) pos: vec4f,
 };
 
@@ -35,14 +35,21 @@ fn vs_main(in: VertexInput, @builtin(instance_index) index: u32) -> VertexOutput
     let x: f32 = f32(index % 20) - 10;
     let y: f32 = f32(index / 20) - 10;
     out.pos = r_locals.transform * (in.pos + vec4(3.0 * x, 0.0, - 3.0 * y, 1.0));
-    out.color = vec4(in.texcoord, 1.0, 1.0);
+    out.uv = in.texcoord;
     return out;
 }
 
+@group(0) @binding(1)
+var tex: texture_2d<f32>;
+
+@group(0) @binding(2)
+var samp: sampler;
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let physical_color = pow(in.color.rgb, vec3(2.2));  // gamma correct
-    return vec4(physical_color, in.color.a);
+    let color = textureSample(tex, samp, in.uv);
+    let physical_color = pow(color.rgb, vec3(2.2));  // gamma correct
+    return vec4(physical_color, color.a);
 }
 """
 
@@ -119,12 +126,55 @@ uniform_buffer = device.create_buffer(
     label="Cube Example uniform buffer",
 )
 
+texture_size=(4,4)
+texture = device.create_texture(
+    size=texture_size, 
+    format=wgpu.TextureFormat.rgba8unorm,
+    usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST
+)
+
+texture_view = texture.create_view()
+
+texture_data = np.array(
+    [255, 0, 0, 255,   0, 255,   0, 255,  80,  80,  80, 255, 255, 255, 0,   255,
+     0, 255, 0, 255, 255,   0,   0, 255, 128, 128, 128, 255, 0, 255, 255,   255,
+     255, 0, 0, 255, 128, 128, 128, 255, 200, 200, 200, 255, 255, 0, 255 ,  255,
+     0, 0, 255, 255,  80,  80,  80, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    dtype=np.uint8
+)
+
+device.queue.write_texture(
+    destination=wgpu.TexelCopyTextureInfo(
+        texture=texture,
+        origin=(0,0,0)
+    ),
+    data=texture_data,
+    data_layout=wgpu.TexelCopyBufferLayout(
+        bytes_per_row=texture_size[0] * 4
+    ),
+    size=texture_size
+)
+
+sampler = device.create_sampler(
+)
+
 bind_group_layout = device.create_bind_group_layout(
     entries=[
         wgpu.BindGroupLayoutEntry(
             binding=0,
             visibility=wgpu.ShaderStage.VERTEX | wgpu.ShaderStage.FRAGMENT,
             buffer={},
+        ),
+        wgpu.BindGroupLayoutEntry(
+            binding=1,
+            visibility=wgpu.ShaderStage.FRAGMENT,
+            texture={}
+        ),
+        wgpu.BindGroupLayoutEntry(
+            binding=2,
+            visibility=wgpu.ShaderStage.FRAGMENT,
+            sampler={}
         )
     ],
     label="Cube Example bind group layout",
@@ -136,6 +186,14 @@ bind_group = device.create_bind_group(
         wgpu.BindGroupEntry(
             binding=0,
             resource=uniform_buffer,
+        ),
+        wgpu.BindGroupEntry(
+            binding=1,
+            resource=texture_view
+        ),
+        wgpu.BindGroupEntry(
+            binding=2,
+            resource=sampler
         )
     ],
     label="Cube Example bind group",
