@@ -15,16 +15,21 @@ wgsl_shader_source = """
 struct VertexInput {
     @location(0) pos : vec4<f32>,
     @location(1) texcoord: vec2<f32>,
+    @location(2) normal: vec3<f32>,
 };
 
-struct Locals {
-    transform: mat4x4<f32>,
+struct Uniforms {
+    pv: mat4x4<f32>,
+    model: mat4x4<f32>,
+    camera_pos: vec4<f32>
 };
 @group(0) @binding(0)
-var<uniform> r_locals: Locals;
+var<uniform> u: Uniforms;
 
 struct VertexOutput {
     @location(0) uv : vec2f,
+    @location(1) normal: vec3f,
+    @location(2) world_pos: vec4f,
     @builtin(position) pos: vec4f,
 };
 
@@ -34,8 +39,11 @@ fn vs_main(in: VertexInput, @builtin(instance_index) index: u32) -> VertexOutput
     var out: VertexOutput;
     let x: f32 = f32(index % 20) - 10;
     let y: f32 = f32(index / 20) - 10;
-    out.pos = r_locals.transform * (in.pos + vec4(3.0 * x, 0.0, - 3.0 * y, 1.0));
+    let instance_offset = vec4(3.0 * x, 0.0, - 3.0 * y, 1.0);
+    out.world_pos = u.model * (in.pos + instance_offset);
+    out.pos = u.pv * out.world_pos;
     out.uv = in.texcoord;
+    out.normal = (u.model * vec4(in.normal, 0.0)).xyz;
     return out;
 }
 
@@ -47,46 +55,58 @@ var samp: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let color = textureSample(tex, samp, in.uv);
+    let light_dir = normalize(vec3(0.0, 1.0, -1.0));
+
+    let view_dir = normalize(u.camera_pos.xyz - in.world_pos.xyz);
+    let half_dir = normalize(view_dir + light_dir);
+        
+    let albedo = textureSample(tex, samp, in.uv);
+    let diffuse = max(0, dot(in.normal, light_dir));
+
+    let specular = pow(max(dot(in.normal, half_dir), 0.0), 32.0);
+
+    let color = diffuse * albedo + specular;
+    //let color = vec4(vec3(1.0) * specular, 1.0);
+
     let physical_color = pow(color.rgb, vec3(2.2));  // gamma correct
     return vec4(physical_color, color.a);
 }
 """
 
-# pos         texcoord
-# x, y, z, w, u, v
+# pos        texcoord normal
+# x, y, z, w, u, v , nx, ny, nz
 vertex_data = np.array(
     [
         # top (0, 0, 1)
-        [-1, -1, 1, 1, 0, 0],
-        [1, -1, 1, 1, 1, 0],
-        [1, 1, 1, 1, 1, 1],
-        [-1, 1, 1, 1, 0, 1],
+        [-1, -1, 1, 1, 0, 0, 0, 0, 1],
+        [1, -1, 1, 1, 1, 0, 0, 0, 1],
+        [1, 1, 1, 1, 1, 1, 0, 0, 1],
+        [-1, 1, 1, 1, 0, 1, 0, 0, 1],
         # bottom (0, 0, -1)
-        [-1, 1, -1, 1, 1, 0],
-        [1, 1, -1, 1, 0, 0],
-        [1, -1, -1, 1, 0, 1],
-        [-1, -1, -1, 1, 1, 1],
+        [-1, 1, -1, 1, 1, 0, 0, 0, -1],
+        [1, 1, -1, 1, 0, 0, 0, 0, -1],
+        [1, -1, -1, 1, 0, 1, 0, 0, -1],
+        [-1, -1, -1, 1, 1, 1, 0, 0, -1],
         # right (1, 0, 0)
-        [1, -1, -1, 1, 0, 0],
-        [1, 1, -1, 1, 1, 0],
-        [1, 1, 1, 1, 1, 1],
-        [1, -1, 1, 1, 0, 1],
+        [1, -1, -1, 1, 0, 0, 1, 0, 0],
+        [1, 1, -1, 1, 1, 0, 1, 0, 0],
+        [1, 1, 1, 1, 1, 1, 1, 0, 0],
+        [1, -1, 1, 1, 0, 1, 1, 0, 0],
         # left (-1, 0, 0)
-        [-1, -1, 1, 1, 1, 0],
-        [-1, 1, 1, 1, 0, 0],
-        [-1, 1, -1, 1, 0, 1],
-        [-1, -1, -1, 1, 1, 1],
+        [-1, -1, 1, 1, 1, 0, -1, 0, 0],
+        [-1, 1, 1, 1, 0, 0, -1, 0, 0],
+        [-1, 1, -1, 1, 0, 1, -1, 0, 0],
+        [-1, -1, -1, 1, 1, 1, -1, 0, 0],
         # front (0, 1, 0)
-        [1, 1, -1, 1, 1, 0],
-        [-1, 1, -1, 1, 0, 0],
-        [-1, 1, 1, 1, 0, 1],
-        [1, 1, 1, 1, 1, 1],
+        [1, 1, -1, 1, 1, 0, 0, 1, 0],
+        [-1, 1, -1, 1, 0, 0, 0, 1, 0],
+        [-1, 1, 1, 1, 0, 1, 0, 1, 0],
+        [1, 1, 1, 1, 1, 1, 0, 1, 0],
         # back (0, -1, 0)
-        [1, -1, 1, 1, 0, 0],
-        [-1, -1, 1, 1, 1, 0],
-        [-1, -1, -1, 1, 1, 1],
-        [1, -1, -1, 1, 0, 1],
+        [1, -1, 1, 1, 0, 0, 0, -1, 0],
+        [-1, -1, 1, 1, 1, 0, 0, -1, 0],
+        [-1, -1, -1, 1, 1, 1, 0, -1, 0],
+        [1, -1, -1, 1, 0, 1, 0, -1, 0],
     ],
     dtype=np.float32,
 )
@@ -121,7 +141,7 @@ context.configure(device=device, format=render_texture_format)
 shader = device.create_shader_module(code=wgsl_shader_source)
 
 uniform_buffer = device.create_buffer(
-    size= 4 * 4 * 4, # 4x4 f32 matrix
+    size= 4 * (4 * 4 + 4 * 4 + 4), # 4x4 + 4x4 f32 matrix + vec4<f32>
     usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST,
     label="Cube Example uniform buffer",
 )
@@ -212,7 +232,7 @@ render_pipeline = device.create_render_pipeline(
             module=shader,
             buffers=[
                 wgpu.VertexBufferLayout(
-                    array_stride=4 * 6,
+                    array_stride=4 * 9,
                     step_mode="vertex",
                     attributes=[
                         wgpu.VertexAttribute(
@@ -225,6 +245,11 @@ render_pipeline = device.create_render_pipeline(
                             offset=4 * 4,
                             shader_location=1,
                         ),
+                        wgpu.VertexAttribute(
+                            format="float32x3",
+                            offset=6 * 4,
+                            shader_location=2
+                        )
                     ],
                 ),
             ],
@@ -272,12 +297,14 @@ def drawing_function():
     model = glm.mat4(1.0)
     model = glm.rotate(model, glm.radians(t % 360) * 20.0, glm.vec3(0.0, 1.0, 0.0))
 
-    uniform_data = glm.perspectiveFovRH_ZO(glm.radians(60), window_size[0], window_size[1], 0.1, 100.0) * glm.lookAt(
-            glm.vec3(3.0, 3.0, -6.0),
+    camera = glm.vec4(0.0, 2.0, -6.0, 1.0)
+    pv = glm.perspectiveFovRH_ZO(glm.radians(60), window_size[0], window_size[1], 0.1, 100.0) * glm.lookAt(
+            glm.vec3(camera),
             glm.vec3(0.0, 0.0, 0.0),
-            glm.vec3(0.0, 1.0, 0.0)) * model
+            glm.vec3(0.0, 1.0, 0.0))
 
-    device.queue.write_buffer(uniform_buffer, 0, uniform_data.to_bytes())
+    device.queue.write_buffer(uniform_buffer, 0,
+            pv.to_bytes() + model.to_bytes() + camera.to_bytes())
 
 
     render_pass = command_encoder.begin_render_pass(
